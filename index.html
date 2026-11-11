@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="fr" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Simulateur clinique d’arythmie & SVR</title>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{font-family:Inter,system-ui,sans-serif}
+body{background:#070a14;color:#f3f4f6;min-height:100vh}
+.card{background:rgba(15,23,42,.85);backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.08)}
+.btn{padding:.45rem .5rem;border-radius:.75rem;font-size:11px;font-weight:700;border:1px solid #374151;background:#1f2937;color:#d1d5db;transition:.15s}
+.btn:hover{background:#374151}.btn:focus-visible{outline:2px solid #38bdf8}
+.btn.on{background:var(--c,#2563eb)33;border-color:var(--c,#3b82f6);color:var(--c,#93c5fd)}
+.grid-ecg{background-image:linear-gradient(rgba(16,185,129,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(16,185,129,.07) 1px,transparent 1px);background-size:20px 20px}
+input[type=range]{accent-color:#ef4444}
+.alert{animation:glow 1s infinite alternate}
+@keyframes glow{from{box-shadow:0 0 4px rgba(239,68,68,.2)}to{box-shadow:0 0 22px rgba(239,68,68,.8)}}
+@media (prefers-reduced-motion:reduce){.alert,.zap{animation:none}}
+.zap{animation:zap .6s}@keyframes zap{0%{box-shadow:0 0 0 2px #fb923c,0 0 24px #fb923c}100%{box-shadow:0 0 0 0 transparent}}
+</style>
+</head>
+<body class="p-3 md:p-6">
+<div id="ageModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur">
+  <div class="card rounded-3xl p-6 w-full max-w-sm">
+    <h2 class="text-lg font-bold mb-1">Profil du patient</h2>
+    <p class="text-xs text-gray-400 mb-4">L’âge détermine la fréquence de repos, la FC maximale théorique (220 − âge) et les seuils d’arythmie.</p>
+    <label for="ageIn" class="text-xs font-bold text-gray-300">Âge (ans)</label>
+    <input id="ageIn" type="number" min="1" max="100" value="25" class="w-full mt-1 mb-3 rounded-xl bg-gray-900 border border-gray-700 px-3 py-2 text-lg font-bold text-white">
+    <div id="agePrev" class="text-xs text-gray-300 bg-black/40 rounded-xl p-3 mb-4"></div>
+    <button id="ageGo" class="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 font-bold text-sm">Démarrer la simulation</button>
+  </div>
+</div>
+<header class="max-w-7xl mx-auto flex flex-wrap justify-between items-center gap-3 pb-3 mb-4 border-b border-gray-800">
+  <div>
+    <h1 class="text-lg md:text-xl font-bold">Simulateur clinique & régulation autonome <span class="text-xs align-middle bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full">Expert</span></h1>
+    <p class="text-xs text-gray-400">Pauses de Stokes-Adams (2 BPM), tachycardie, fibrillation, asystolie et baroréflexe</p>
+  </div>
+  <button id="ageChip" class="btn" aria-label="Modifier l’âge du patient"></button>
+  <div id="badge" role="status" aria-live="polite" class="px-4 py-2 rounded-2xl text-xs font-bold border transition-all"></div>
+</header>
+
+<main class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-5">
+  <section class="lg:col-span-7 flex flex-col gap-4">
+    <div id="stage" class="card rounded-3xl p-2 relative overflow-hidden h-[360px] md:h-[420px]">
+      <div id="flash" class="absolute inset-0 bg-white pointer-events-none z-20" style="opacity:0;transition:opacity .4s"></div>
+      <div class="absolute top-3 right-3 z-10 flex gap-2">
+        <button id="vSolid" class="btn on" style="--c:#ef4444">Anatomique</button>
+        <button id="vWire" class="btn">Fils de fer</button>
+      </div>
+      <div id="view" class="w-full h-full cursor-grab active:cursor-grabbing" aria-label="Cœur 3D, déplacer pour tourner"></div>
+      <div class="absolute bottom-3 left-3 right-3 flex justify-between text-[11px] text-gray-300 bg-black/60 px-3 py-1.5 rounded-xl pointer-events-none">
+        <span id="speedTxt">Vitesse 1,0×</span><span id="pulseTxt" class="font-mono text-red-400"></span>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="card rounded-2xl p-3"><span class="text-[10px] text-gray-400">Débit cardiaque</span><div class="text-lg font-black"><span id="co">–</span> <small class="text-[10px] text-gray-400">L/min</small></div></div>
+      <div class="card rounded-2xl p-3"><span class="text-[10px] text-gray-400">Volume d’éjection</span><div class="text-lg font-black"><span id="sv">–</span> <small class="text-[10px] text-gray-400">mL</small></div></div>
+      <div class="card rounded-2xl p-3"><span class="text-[10px] text-gray-400">Pression moyenne</span><div class="text-lg font-black"><span id="map">–</span> <small class="text-[10px] text-gray-400">mmHg</small></div></div>
+      <div class="card rounded-2xl p-3 border-blue-500/30"><span class="text-[10px] text-blue-300 font-bold">SVR (baroréflexe)</span><div class="text-lg font-black text-blue-400"><span id="svr">–</span> <small class="text-[10px] text-gray-400">dyn·s/cm⁵</small></div></div>
+    </div>
+  </section>
+
+  <section class="lg:col-span-5 flex flex-col gap-4">
+    <div class="card rounded-3xl p-4">
+      <div class="flex justify-between text-xs mb-2"><span class="font-bold">ECG — dérivation II</span><span id="rname" class="font-mono"></span></div>
+      <div class="grid-ecg bg-black/80 rounded-2xl border border-gray-800 p-1"><canvas id="ecg" class="w-full h-28 block"></canvas></div>
+      <div class="flex justify-between text-[10px] text-gray-400 mt-2"><span id="warn"></span><span id="rr" class="font-mono"></span></div>
+    </div>
+
+    <div class="card rounded-3xl p-3.5">
+      <div class="text-xs font-bold text-gray-300 mb-2">Contrôle du temps</div>
+      <div class="grid grid-cols-3 gap-2">
+        <button id="bSlow" class="btn" aria-pressed="false">Ralenti 0,3×</button>
+        <button id="bFreeze" class="btn" aria-pressed="false">Pause (Espace)</button>
+        <button id="bRec" class="btn" style="--c:#34d399;color:#6ee7b7">Récupération</button>
+        <button id="bAden" class="btn" style="color:#fbbf24">Adénosine / Valsalva</button>
+        <select id="joule" class="btn" aria-label="Énergie du choc"><option value="100">100 J</option><option value="150" selected>150 J</option><option value="200">200 J</option><option value="300">300 J</option></select>
+        <button id="bShock" class="btn" style="color:#fb923c"></button>
+      </div>
+    </div>
+
+    <div class="card rounded-3xl p-3.5">
+      <div class="text-xs font-bold text-gray-300 mb-2">Rythmes cliniques</div>
+      <div id="modes" class="grid grid-cols-3 gap-2">
+        <button class="btn" data-m="auto">Automatique</button>
+        <button class="btn" data-m="stokes">Stokes-Adams</button>
+        <button class="btn" data-m="svt">Tachycardie</button>
+        <button class="btn" data-m="vt">Tachy. ventriculaire</button>
+        <button class="btn" data-m="vfib">Fibrillation</button>
+        <button class="btn" data-m="asystole">Asystolie</button>
+      </div>
+    </div>
+
+    <div class="card rounded-3xl p-3.5">
+      <div class="flex justify-between text-xs mb-1.5"><label for="slider" class="font-bold text-gray-300">Fréquence cardiaque</label><span id="bpmTxt" class="text-red-400 font-black text-sm"></span></div>
+      <input id="slider" type="range" min="0" max="250" value="75" class="w-full">
+      <div class="flex justify-between text-[10px] text-gray-500 mt-1"><span>0</span><span id="lblRest"></span><span id="lblMax"></span><span>250</span></div>
+    </div>
+  </section>
+</main>
+<footer class="max-w-7xl mx-auto text-center text-[11px] text-gray-600 mt-4 pt-2 border-t border-gray-900">Outil pédagogique — modèle simplifié, non destiné à un usage clinique.</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+
+/* ---------- État ---------- */
+const S = { bpm: 75, mode: "auto", frozen: false, slow: false, rec: false, recT: 0, recFrom: 75, since: 0, vfibT: 0, v: 0, age: 25, rest: 72, hrmax: 195, started: false, tachT: 0, post: 0, ramp: -1 };
+
+const RHY = {
+  nsr:      { n: "NSR (normal)", b: "Rythme sinusal normal", c: "#34d399", w: "SVR et régulation stables." },
+  post:     { n: "Pause post-choc", b: "⚡ Pause post-choc", c: "#e5e7eb", w: "Silence électrique transitoire après le choc." },
+  stach:    { n: "Tachycardie sinusale", b: "Tachycardie sinusale (effort)", c: "#a3e635", w: "Réponse physiologique, sous la FC max." },
+  vt:       { n: "Tachycardie ventriculaire", b: "🚨 Tachycardie ventriculaire", c: "#fb923c", w: "Rythme instable : cardioversion (⚡ Choc) requise.", alert: true },
+  brady:    { n: "Bradycardie", b: "⚠ Bradycardie", c: "#60a5fa", w: "Débit réduit, SVR compensatrice." },
+  svt:      { n: "Tachycardie (SVT)", b: "⚠ Tachycardie supraventriculaire", c: "#fbbf24", w: "Remplissage diastolique réduit." },
+  stokes:   { n: "Stokes-Adams", b: "⚠ Stokes-Adams : pauses extrêmes", c: "#22d3ee", w: "Pauses prolongées : risque de syncope." },
+  vfib:     { n: "Fibrillation (V-Fib)", b: "🚨 Fibrillation ventriculaire", c: "#f87171", w: "Aucune éjection efficace.", alert: true },
+  asystole: { n: "Asystolie", b: "🚨 Arrêt cardiaque (asystolie)", c: "#94a3b8", w: "Perfusion nulle : récupération impossible.", alert: true }
+};
+
+function rhythm() {
+  if (S.post > 0) return "post";
+  if (S.mode !== "auto") return S.mode;
+  const b = S.bpm;
+  return b <= 0 ? "asystole" : b <= 3 ? "stokes" : b > S.hrmax ? "svt" : b < S.rest * 0.68 ? "brady" : b > S.rest * 1.4 ? "stach" : "nsr";
+}
+
+/* ---------- Hémodynamique (baroréflexe simplifié) ---------- */
+function hemo(r, bpm) {
+  if (r === "asystole" || bpm <= 0) return { sv: 0, co: 0, map: 0, svr: 0 };
+  const rr = 60000 / bpm;
+  const sv0 = clamp(35 + S.age * 1.5, 40, 70), rr0 = 60000 / S.rest;
+  let sv = r === "vfib" ? 5 : Math.min(sv0 * 1.35, sv0 * (0.45 + 0.55 * clamp(rr / rr0, 0.35, 1.3)));
+  if (r === "vt") sv *= 0.6;
+  const co = bpm * sv / 1000;
+  const map0 = co * 1400 / 80;
+  const svr = clamp(1400 * (1 + 0.9 * (93 - map0) / 93), 800, 2400);
+  return { sv, co, map: co * svr / 80 + (co > 0 ? 8 : 0), svr };
+}
+
+/* ---------- Scène 3D ---------- */
+const view = $("view");
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+camera.position.set(0, 0, 7);
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+view.appendChild(renderer.domElement);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+Object.assign(controls, { enableDamping: true, dampingFactor: 0.05, minDistance: 3.5, maxDistance: 11 });
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const key = new THREE.DirectionalLight(0xffffff, 1.1); key.position.set(4, 5, 6); scene.add(key);
+const rim = new THREE.DirectionalLight(0xef4444, 0.8); rim.position.set(-5, -2, -3); scene.add(rim);
+
+const sh = new THREE.Shape();
+sh.moveTo(25, 25); sh.bezierCurveTo(25, 25, 20, 0, 0, 0); sh.bezierCurveTo(-30, 0, -30, 35, -30, 35);
+sh.bezierCurveTo(-30, 55, -10, 77, 25, 95); sh.bezierCurveTo(60, 77, 80, 55, 80, 35);
+sh.bezierCurveTo(80, 35, 80, 0, 50, 0); sh.bezierCurveTo(35, 0, 25, 25, 25, 25);
+const geo = new THREE.ExtrudeGeometry(sh, { depth: 22, bevelEnabled: true, bevelThickness: 14, bevelSize: 12, bevelSegments: 8, curveSegments: 28 });
+geo.center();
+const mat = new THREE.MeshStandardMaterial({ color: 0xcc2222, roughness: 0.35, metalness: 0.1 });
+const heart = new THREE.Mesh(geo, mat);
+heart.scale.setScalar(0.03); heart.rotation.z = Math.PI;
+const group = new THREE.Group(); group.add(heart); scene.add(group);
+const target = new THREE.Color();
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+  const c = $("ecg"), d = Math.min(devicePixelRatio, 2), r = c.getBoundingClientRect();
+  c.width = r.width * d; c.height = r.height * d;
+}
+new ResizeObserver(resize).observe(view);
+addEventListener("resize", resize);
+
+/* ---------- ECG ---------- */
+const N = 600, DT = 8;               // 600 échantillons × 8 ms ≈ 4,8 s
+const buf = new Float32Array(N); let wi = 0, acc = 0, lastBeat = 0;
+const g = (t, m, s, a) => a * Math.exp(-0.5 * ((t - m) / s) ** 2);
+function beat(t, rr) {
+  const x = t / clamp(rr / 800, 0.5, 1);
+  return (rr > 450 ? g(x, 40, 14, 0.16) : 0) + g(x, 150, 5, -0.12) + g(x, 165, 7, 1.25) + g(x, 181, 6, -0.28) + g(x, 330, 30, 0.3);
+}
+
+function step(r) {
+  S.since += DT;
+  // Fréquence non tolérable (> 115 % de la FC max) : le cœur dégénère inévitablement en fibrillation après ~6 s
+  if ((r === "svt" || r === "vt") && S.bpm > S.hrmax * 1.15) {
+    S.tachT += DT;
+    if (S.tachT >= 6000) { S.mode = "vfib"; S.tachT = 0; S.vfibT = 0; uiKey = ""; r = "vfib"; }
+  } else if (S.tachT > 0) {
+    S.tachT = Math.max(0, S.tachT - DT * 2);
+    if (S.tachT === 0) uiKey = "";
+  }
+  let v;
+  if (r === "asystole" || r === "post") {
+    v = (Math.random() - 0.5) * 0.03;
+    if (r === "post" && (S.post -= DT) <= 0) { S.post = 0; setBpm(40); S.since = 60000 / 40 - 300; S.ramp = 0; uiKey = ""; }   // échappement jonctionnel → remontée
+  }
+  else if (r === "vfib") {
+    const t = performance.now();
+    v = (0.45 * Math.sin(t / 70) + 0.35 * Math.sin(t / 41 + 1) + (Math.random() - 0.5) * 0.3) * (0.7 + 0.3 * Math.sin(t / 600));
+    S.vfibT += DT;
+    if (S.vfibT > 40000) { S.mode = "asystole"; setBpm(0); S.vfibT = 0; }
+  } else {
+    const rr = 60000 / Math.max(S.bpm, 0.5);
+    if (S.since >= rr) { S.since = 0; lastBeat = performance.now(); }
+    v = (r === "vt" ? 0.9 * Math.sin(2 * Math.PI * S.since / rr) : beat(S.since, rr)) + (Math.random() - 0.5) * 0.02;
+  }
+  if (r !== "vfib") S.vfibT = 0;
+  S.v = v; buf[wi] = v; wi = (wi + 1) % N;
+}
+
+const ctx = $("ecg").getContext("2d");
+function drawECG(col) {
+  const c = $("ecg"), w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.lineWidth = 2 * Math.min(devicePixelRatio, 2); ctx.lineJoin = "round"; ctx.strokeStyle = col;
+  ctx.shadowColor = col; ctx.shadowBlur = 6;
+  ctx.beginPath(); let on = false;
+  for (let i = 0; i < N; i++) {
+    if ((i - wi + N) % N < 14) { on = false; continue; }   // espace du balayage
+    const x = i / (N - 1) * w, y = h / 2 - buf[i] * h * 0.38;
+    on ? ctx.lineTo(x, y) : ctx.moveTo(x, y); on = true;
+  }
+  ctx.stroke();
+}
+
+/* ---------- Interface ---------- */
+let uiKey = "";
+function updateUI() {
+  const r = rhythm(), b = Math.round(S.bpm), k = r + b + S.rec + S.mode;
+  if (k === uiKey) return; uiKey = k;
+  const R = RHY[r], H = hemo(r, S.bpm);
+  const bd = $("badge");
+  bd.style.cssText = `color:${R.c};border-color:${R.c}66;background:${R.c}1a`;
+  bd.textContent = S.rec ? "🔄 Récupération autonome…" : R.b;
+  bd.classList.toggle("alert", !!R.alert); $("stage").classList.toggle("alert", !!R.alert);
+  $("rname").textContent = R.n; $("rname").style.color = R.c;
+  $("warn").textContent = S.rec ? "Retour progressif vers " + S.rest + " BPM." : R.w;
+  $("bpmTxt").textContent = b + " BPM"; $("slider").value = b;
+  $("rr").textContent = b > 0 ? "RR : " + Math.round(60000 / b) + " ms" : "RR : arrêt";
+  $("co").textContent = H.co.toFixed(2); $("sv").textContent = Math.round(H.sv);
+  $("map").textContent = Math.round(H.map); $("svr").textContent = Math.round(H.svr);
+  document.querySelectorAll("#modes .btn").forEach(el => {
+    const on = el.dataset.m === S.mode; el.classList.toggle("on", on);
+    el.style.setProperty("--c", on ? RHY[el.dataset.m === "auto" ? "nsr" : el.dataset.m].c : "");
+  });
+}
+
+function setBpm(v) {
+  S.bpm = clamp(v, 0, 240);
+  const rr = 60000 / Math.max(S.bpm, 0.5);
+  if (rr > 4000) S.since = Math.max(S.since, rr - 1500);   // première onde visible rapidement
+}
+
+const DEF = () => ({ auto: S.rest, stokes: 2, svt: Math.min(240, S.hrmax + 25), vt: 180, vfib: 190, asystole: 0 });
+document.querySelectorAll("#modes .btn").forEach(el => el.onclick = () => {
+  S.rec = false; S.mode = el.dataset.m; S.vfibT = 0; S.post = 0; S.ramp = -1; setBpm(DEF()[S.mode]);
+});
+$("slider").oninput = e => { S.rec = false; S.mode = "auto"; S.post = 0; S.ramp = -1; setBpm(+e.target.value); };
+$("bRec").onclick = () => {
+  const msg = { asystole: "Asystolie : aucune récupération spontanée.", vfib: "Fibrillation : seule la défibrillation (⚡ Choc) rétablit un rythme.", vt: "TV instable : cardioversion (⚡ Choc) nécessaire.", svt: "SVT : ne ralentit pas progressivement — manœuvre vagale / adénosine." }[rhythm()];
+  if (msg) { $("warn").textContent = msg; return; }
+  S.rec = true; S.mode = "auto"; S.recFrom = S.bpm; S.recT = 0;
+};
+function toggle(btn, key, on, off) {
+  S[key] = !S[key]; btn.setAttribute("aria-pressed", S[key]); btn.classList.toggle("on", S[key]);
+  btn.textContent = S[key] ? on : off;
+}
+$("bSlow").onclick = () => { toggle($("bSlow"), "slow", "Vitesse 1,0×", "Ralenti 0,3×"); $("speedTxt").textContent = S.slow ? "🔍 Ralenti 0,3×" : "Vitesse 1,0×"; };
+$("bFreeze").onclick = () => toggle($("bFreeze"), "frozen", "Reprendre", "Pause (Espace)");
+addEventListener("keydown", e => { if (e.code === "Space" && e.target.tagName !== "BUTTON" && e.target.tagName !== "INPUT") { e.preventDefault(); $("bFreeze").click(); } });
+
+const setView = w => { mat.wireframe = w; $("vWire").classList.toggle("on", w); $("vSolid").classList.toggle("on", !w); };
+$("vSolid").onclick = () => setView(false); $("vWire").onclick = () => setView(true);
+
+/* ---------- Boucle ---------- */
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(now - last, 100); last = now;
+  if (!S.frozen && S.started) {
+    if (S.rec) {
+      // Récupération biphasique : réactivation vagale rapide (τ≈10 s, 40 %) puis phase lente (τ≈60 s, 60 %).
+      // Si la FC est basse, remontée sympathique plus rapide (τ≈10 s).
+      S.recT += dt * (S.slow ? 0.3 : 1);
+      const f = S.recFrom > S.rest ? 0.4 * Math.exp(-S.recT / 10000) + 0.6 * Math.exp(-S.recT / 60000) : Math.exp(-S.recT / 10000);
+      const nb = S.rest + (S.recFrom - S.rest) * f;
+      if (Math.abs(nb - S.rest) < 1) { S.bpm = S.rest; S.rec = false; } else S.bpm = nb;
+    }
+    if (S.ramp >= 0 && S.post === 0 && S.mode === "auto") {
+      S.ramp += dt * (S.slow ? 0.3 : 1);
+      const nb = 40 + (S.rest - 40) * (1 - Math.exp(-S.ramp / 2500));
+      if (S.rest - nb < 1) { S.bpm = S.rest; S.ramp = -1; } else S.bpm = nb;
+    }
+    acc += dt * (S.slow ? 0.3 : 1);
+    const r = rhythm();
+    while (acc >= DT) { acc -= DT; step(r); }
+  }
+  const r = rhythm();
+  updateUI();
+  if (S.tachT > 0) $("warn").textContent = "⚠ FC non tolérable : fibrillation dans " + Math.ceil((6000 - S.tachT) / 1000) + " s";
+  // battement visuel
+  const pulse = r === "vfib" ? 1 + (Math.random() - 0.5) * 0.04 : r === "asystole" ? 0.96 : 1 - 0.08 * Math.max(0, S.v);
+  group.scale.setScalar(pulse);
+  target.set(r === "asystole" ? 0x7a4a55 : r === "vfib" ? 0xa01a30 : 0xcc2222);
+  mat.color.lerp(target, 0.05);
+  $("pulseTxt").textContent = r === "asystole" ? "Aucune activité" : r === "vfib" ? "Activité chaotique" : (S.v > 0.6 ? "● Systole" : "Diastole");
+  controls.update(); renderer.render(scene, camera); drawECG(RHY[r].c);
+  requestAnimationFrame(frame);
+}
+const restFor = a => a < 2 ? 125 : a < 6 ? 100 : a < 12 ? 88 : a < 18 ? 78 : 72;
+const readAge = () => clamp(Math.round(+$("ageIn").value) || 25, 1, 100);
+function applyAge(a) {
+  S.age = a; S.hrmax = 220 - a; S.rest = restFor(a);
+  S.mode = "auto"; S.rec = false; S.vfibT = 0; S.tachT = 0; S.post = 0; S.ramp = -1; setBpm(S.rest); uiKey = "";
+  $("ageChip").textContent = `Âge : ${a} ans · FC max ${S.hrmax}`;
+  $("lblRest").textContent = "repos " + S.rest; $("lblMax").textContent = "max " + S.hrmax + " / critique " + Math.round(S.hrmax * 1.15);
+}
+function agePreview() { const a = readAge(); $("agePrev").innerHTML = `FC de repos : <b>${restFor(a)}</b> BPM<br>FC max théorique (220 − âge) : <b>${220 - a}</b> BPM<br>Au-delà : tachycardie pathologique (SVT / TV).`; }
+$("ageIn").oninput = agePreview;
+$("ageIn").onkeydown = e => { if (e.key === "Enter") $("ageGo").click(); };
+$("ageGo").onclick = () => { applyAge(readAge()); $("ageModal").classList.add("hidden"); S.started = true; };
+$("ageChip").onclick = () => { S.started = false; $("ageIn").value = S.age; agePreview(); $("ageModal").classList.remove("hidden"); };
+$("bAden").onclick = () => {
+  const r = rhythm();
+  if (r !== "svt") { $("warn").textContent = r === "stach" ? "Sans effet : la tachycardie sinusale est physiologique." : "Indiqué uniquement dans la SVT."; return; }
+  S.mode = "auto"; S.rec = false; S.tachT = 0; S.post = 3000; S.ramp = -1; setBpm(0); uiKey = "";   // arrêt brusque + pause post-adénosine
+};
+let charge = 0;   // 0 repos, 1 charge en cours, 2 prêt
+const bS = $("bShock");
+function shockUI() {
+  bS.textContent = charge === 0 ? "⚡ Charger" : charge === 1 ? "Charge…" : "⚡ DÉCHARGER";
+  bS.classList.toggle("on", charge === 2); bS.style.setProperty("--c", "#fb923c");
+}
+shockUI();
+bS.onclick = () => {
+  if (charge === 1) return;
+  if (charge === 0) { charge = 1; shockUI(); setTimeout(() => { charge = 2; shockUI(); }, 2000); return; }
+  charge = 0; shockUI();
+  const J = +$("joule").value, r = rhythm(), fl = $("flash");
+  fl.style.opacity = 1; setTimeout(() => fl.style.opacity = 0, 120);
+  document.querySelectorAll(".card").forEach(c => { c.classList.remove("zap"); void c.offsetWidth; c.classList.add("zap"); });
+  for (let i = 0; i < 4; i++) { buf[wi] = 3; wi = (wi + 1) % N; }      // artéfact du choc
+  for (let i = 0; i < 40; i++) { buf[wi] = 0; wi = (wi + 1) % N; }     // ligne plate post-choc
+  if (r === "vfib" || r === "vt" || r === "svt") {
+    let p = { 100: 0.45, 150: 0.65, 200: 0.85, 300: 0.95 }[J] - S.vfibT / 40000 * 0.3;
+    if (r === "svt") p = Math.max(p, 0.9);                              // cardioversion synchronisée
+    if (Math.random() < clamp(p, 0.1, 0.95)) {
+      S.mode = "auto"; S.rec = false; S.vfibT = 0; S.tachT = 0; S.post = 2200; S.ramp = -1; setBpm(0); uiKey = "";
+    } else $("warn").textContent = "Choc inefficace : augmentez l’énergie et réessayez.";
+  } else if (r === "asystole") {
+    $("warn").textContent = "Asystolie : choc non indiqué (RCP + adrénaline).";
+  } else if (Math.random() < 0.3) {
+    S.mode = "vfib"; S.vfibT = 0; uiKey = "";                             // choc sur rythme perfusant
+  } else $("warn").textContent = "Choc non indiqué : rythme perfusant (risque de fibrillation).";
+};
+applyAge(25); agePreview(); resize(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
